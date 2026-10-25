@@ -15,7 +15,7 @@ const THEMES = [
   { id: 'pop', label: '✨ Pop internationale', artists: ['Taylor Swift', 'Dua Lipa', 'The Weeknd', 'Harry Styles', 'Billie Eilish', 'Ariana Grande', 'Ed Sheeran', 'Bruno Mars', 'Lady Gaga', 'Rihanna', 'Katy Perry', 'Miley Cyrus', 'Olivia Rodrigo', 'Sabrina Carpenter', 'Justin Bieber', 'Adele'] },
   { id: 'rock', label: '🎸 Rock', artists: ['Queen', 'AC/DC', 'Nirvana', 'Guns N\' Roses', 'The Rolling Stones', 'The Beatles', 'Led Zeppelin', 'Red Hot Chili Peppers', 'Foo Fighters', 'Muse', 'Arctic Monkeys', 'The White Stripes', 'Bon Jovi', 'Metallica', 'U2', 'The Killers', 'Green Day', 'Noir Désir'] },
   { id: 'electro', label: '🪩 Électro & dance', artists: ['Daft Punk', 'David Guetta', 'Avicii', 'Calvin Harris', 'Bob Sinclar', 'Martin Solveig', 'Swedish House Mafia', 'Kygo', 'The Chainsmokers', 'Justice', 'Modjo', 'Eiffel 65', 'Benny Benassi', 'Moby', 'Gala', 'Cassius'] },
-  { id: 'disney', label: '🏰 Disney', titleOnly: true, albums: ['Le Roi Lion', 'La Reine des Neiges', 'Aladdin', 'La Petite Sirène', 'Encanto', 'Vaiana', 'Mulan', 'Le Livre de la jungle', 'Les Aristochats', 'Le Bossu de Notre-Dame', 'La Belle et la Bête', 'Hercule', 'Coco', 'Tarzan', 'Pocahontas'] },
+  { id: 'disney', label: '🏰 Disney', disney: true },
   { id: 'custom', label: '✏️ Mes artistes' },
 ];
 
@@ -122,8 +122,15 @@ function artistCandidates(name) {
   return [name, ...parts].map((s) => s.trim()).filter(Boolean);
 }
 
+// pour les Disney, la réponse principale est le film (plus connu que la chanson)
 function matchArtist(guess, track) {
+  if (track.film) return filmCandidates(track.film).some((c) => close(guess, c));
   return artistCandidates(track.artist).some((c) => close(guess, c));
+}
+
+// artiste 1 + titre 1 (+1 si les deux) ; Disney : film 2 + chanson 1 en bonus
+function fieldPoints(track, k) {
+  return track.film && k === 'artist' ? 2 : 1;
 }
 
 function matchTitle(guess, track) {
@@ -163,7 +170,7 @@ async function mapLimit(items, n, fn) {
 
 const JUNK = /karaok|instrumental|playback|made famous|tribute|originally performed|in the style of|8-bit|lullaby|berceuse/i;
 
-function toTrack(r, titleOnly) {
+function toTrack(r, film) {
   return {
     id: r.trackId,
     title: r.trackName,
@@ -175,15 +182,41 @@ function toTrack(r, titleOnly) {
     thumb: r.artworkUrl100 || '',
     preview: r.previewUrl,
     url: r.trackViewUrl,
-    titleOnly: !!titleOnly,
+    film: film || null,
   };
+}
+
+// Les compilations « Les plus belles chansons Disney » ne contiennent que des chansons en français
+// et indiquent le film dans le titre : « Comme un homme (De "Mulan") ».
+const DISNEY_ALBUMS = /plus belles chansons/i;
+const FILM_IN_TITLE = /[([](?:De|From) ["“«]\s*(.+?)\s*["”»][)\]]/;
+const FILM_FIX = {
+  'blanche neige et les septs nains': 'Blanche-Neige et les Sept Nains',
+  'sleeping beauty': 'La Belle au Bois Dormant',
+};
+
+function filmName(raw) {
+  const fixed = FILM_FIX[norm(raw)] || raw;
+  // « Pocahontas - Une Légende Indienne », « Vaiana, La Légende… » → « Pocahontas », « Vaiana »
+  return fixed.split(/\s+[-–]\s+|,\s+/)[0].trim();
+}
+
+// réponses acceptées pour un film en plus de son nom complet
+const FILM_ALIASES = {
+  'blanche neige et les sept nains': ['Blanche-Neige'],
+  'letrange noel de monsieur jack': ['Monsieur Jack', "L'étrange Noël"],
+  'les 101 dalmatiens': ['101 Dalmatiens'],
+};
+
+function filmCandidates(film) {
+  return [film, ...(FILM_ALIASES[norm(film)] || [])];
 }
 
 // résultats gardés quelques jours : l'API iTunes limite à ~20 requêtes/minute
 const SOURCE_TTL = 3 * 24 * 3600 * 1000;
 
 async function fetchSource(src) {
-  const key = `src:${settings.country}:${src.album ? 'al' : 'ar'}:${norm(src.album || src.artist)}`;
+  const key = `src3:${settings.country}:${src.disney ? 'disney' : 'ar:' + norm(src.artist)}`;
   const hit = store.get(key, null);
   if (hit && Date.now() - hit.at < SOURCE_TTL && hit.tracks.length) return hit.tracks;
   let tracks;
@@ -197,20 +230,34 @@ async function fetchSource(src) {
   return tracks;
 }
 
+async function searchDisney() {
+  const results = await itunes({ term: 'plus belles chansons disney', attribute: 'albumTerm', limit: '200' });
+  const seen = new Set();
+  const out = [];
+  for (const r of results) {
+    if (r.kind !== 'song' || !r.previewUrl || !DISNEY_ALBUMS.test(r.collectionName || '')) continue;
+    const m = FILM_IN_TITLE.exec(r.trackName || '');
+    if (!m) continue;
+    const t = toTrack(r, filmName(m[1]));
+    const key = norm(t.cleanTitle);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
 async function searchSource(src) {
-  const results = src.album
-    ? await itunes({ term: src.album, attribute: 'albumTerm' })
-    : await itunes({ term: src.artist, attribute: 'artistTerm' });
-  const want = norm(src.album || src.artist);
+  if (src.disney) return searchDisney();
+  const results = await itunes({ term: src.artist, attribute: 'artistTerm' });
+  const want = norm(src.artist);
   const seen = new Set();
   const out = [];
   for (const r of results) {
     if (r.kind !== 'song' || !r.previewUrl || !r.trackName) continue;
     if (JUNK.test(`${r.trackName} ${r.artistName} ${r.collectionName}`)) continue;
-    const field = src.album ? r.collectionName : r.artistName;
-    if (!norm(field).includes(want)) continue;
-    if (src.album && (!/bande originale|soundtrack|disney/i.test(r.collectionName) || /score|suite\b|medley/i.test(r.trackName))) continue;
-    const t = toTrack(r, src.titleOnly);
+    if (!norm(r.artistName).includes(want)) continue;
+    const t = toTrack(r, null);
     const key = norm(t.cleanTitle);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -230,16 +277,30 @@ async function buildPlaylist(rounds) {
         .forEach((artist) => sources.push({ artist }));
     }
     (th.artists || []).forEach((artist) => sources.push({ artist }));
-    (th.albums || []).forEach((album) => sources.push({ album, titleOnly: th.titleOnly }));
   }
+  const disney = settings.themes.includes('disney');
   // dédoublonne (un même artiste peut être dans deux thèmes)
-  const uniq = [...new Map(sources.map((s) => [norm(s.artist || s.album), s])).values()];
-  if (!uniq.length) throw new Error('Choisis au moins un thème.');
+  const uniq = [...new Map(sources.map((s) => [norm(s.artist), s])).values()];
+  if (!uniq.length && !disney) throw new Error('Choisis au moins un thème.');
 
   // au plus ~2 titres par artiste, sans dépasser la limite de requêtes de l'API
   const count = Math.min(uniq.length, 16, Math.max(8, rounds));
-  const picked = shuffle(uniq).slice(0, count);
-  const lists = (await mapLimit(picked, 5, fetchSource)).filter((l) => l && l.length);
+  const picked = [...(disney ? [{ disney: true }] : []), ...shuffle(uniq).slice(0, count)];
+  let lists = (await mapLimit(picked, 5, fetchSource)).filter((l) => l && l.length);
+
+  // Disney : une file par film pour varier les films, et pas plus que sa part si d'autres thèmes sont cochés
+  lists = lists.flatMap((l) => {
+    if (!l[0].film) return [l];
+    const byFilm = new Map();
+    for (const t of l) byFilm.set(norm(t.film), [...(byFilm.get(norm(t.film)) || []), t]);
+    const share = Math.ceil(rounds / settings.themes.length);
+    // tirage pondéré : plus un film a de chansons dans la compilation, plus il est connu (Aladdin, Le Roi Lion…)
+    return [...byFilm.values()]
+      .map((films) => [Math.random() ** (1 / films.length), films])
+      .sort((x, y) => y[0] - x[0])
+      .map(([, films]) => films)
+      .slice(0, share);
+  });
   if (!lists.length) throw new Error('Aucun extrait trouvé. Vérifie ta connexion ou tes artistes.');
 
   // évite de reproposer les titres des dernières parties
@@ -451,8 +512,9 @@ function startRound() {
       inp.value = '';
       inp.readOnly = false;
     }
-    $('#artist-field').hidden = track.titleOnly;
-    (track.titleOnly ? $('#title-input') : $('#artist-input')).focus({ preventScroll: true });
+    $('#artist-input').placeholder = track.film ? 'Film' : 'Artiste';
+    $('#title-input').placeholder = track.film ? 'Chanson (bonus)' : 'Titre';
+    $('#artist-input').focus({ preventScroll: true });
   } else if (game.answer === 'choice') {
     renderChoices(track);
   } else {
@@ -522,7 +584,7 @@ function submitFree(e) {
   if (!game || game.round.revealed) return;
   const track = current();
   const r = game.round;
-  const fields = track.titleOnly ? ['title'] : ['artist', 'title'];
+  const fields = ['artist', 'title'];
   let anyWrong = false;
   let anyNew = false;
   for (const k of fields) {
@@ -535,10 +597,10 @@ function submitFree(e) {
     if (ok) {
       r.found[k] = true;
       anyNew = true;
-      r.points += track.titleOnly ? 2 : 1;
+      r.points += fieldPoints(track, k);
       f.classList.add('ok');
       inp.readOnly = true;
-      inp.value = k === 'artist' ? track.artist : track.cleanTitle;
+      inp.value = k === 'artist' ? (track.film || track.artist) : track.cleanTitle;
     } else {
       anyWrong = true;
       f.classList.remove('shake');
@@ -547,7 +609,7 @@ function submitFree(e) {
     }
   }
   if (fields.every((k) => r.found[k])) {
-    if (!track.titleOnly) r.points += 1; // bonus « les deux »
+    if (!track.film) r.points += 1; // bonus « les deux »
     reveal();
     return;
   }
@@ -559,18 +621,20 @@ function submitFree(e) {
 /* --- solo : 4 choix --- */
 
 function renderChoices(track) {
-  const taken = new Set([norm(track.cleanTitle)]);
+  // Disney : 4 films différents ; sinon 4 titres différents
+  const keyOf = (t) => norm(t.film || t.cleanTitle);
+  const taken = new Set([keyOf(track)]);
   const others = [];
   for (const t of shuffle(game.pool.concat(game.tracks))) {
-    const k = norm(t.cleanTitle);
-    if (taken.has(k) || t.titleOnly !== track.titleOnly) continue;
+    const k = keyOf(t);
+    if (taken.has(k) || !t.film !== !track.film) continue;
     taken.add(k);
     others.push(t);
     if (others.length === 3) break;
   }
   const opts = shuffle([track, ...others]);
   $('#choices').innerHTML = opts.map((t) =>
-    `<button class="choice" data-ok="${t === track}"><b>${esc(t.cleanTitle)}</b>${t.titleOnly ? '' : `<span>${esc(t.artist)}</span>`}</button>`).join('');
+    `<button class="choice" data-ok="${t === track}"><b>${esc(t.film || t.cleanTitle)}</b>${t.film ? '' : `<span>${esc(t.artist)}</span>`}</button>`).join('');
 }
 
 function onChoice(e) {
@@ -616,9 +680,15 @@ function reveal() {
   $('#choices').hidden = true;
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
 
-  $('#reveal-title').textContent = track.cleanTitle;
-  $('#reveal-artist').textContent = track.artist;
-  $('#reveal-meta').textContent = [track.album !== track.cleanTitle ? track.album : '', track.year].filter(Boolean).join(' · ');
+  if (track.film) {
+    $('#reveal-title').textContent = track.film;
+    $('#reveal-artist').textContent = `« ${track.cleanTitle} »`;
+    $('#reveal-meta').textContent = [track.artist, track.year].filter(Boolean).join(' · ');
+  } else {
+    $('#reveal-title').textContent = track.cleanTitle;
+    $('#reveal-artist').textContent = track.artist;
+    $('#reveal-meta').textContent = [track.album !== track.cleanTitle ? track.album : '', track.year].filter(Boolean).join(' · ');
+  }
   $('#am-link').href = track.url;
 
   const gain = $('#gain');
@@ -643,7 +713,7 @@ function reveal() {
 function renderAwards() {
   const track = current();
   const a = game.round.awards;
-  const rows = track.titleOnly ? [['title', 'Titre · 2 pts']] : [['artist', 'Artiste · 1 pt'], ['title', 'Titre · 1 pt']];
+  const rows = track.film ? [['artist', 'Film · 2 pts'], ['title', 'Chanson · 1 pt']] : [['artist', 'Artiste · 1 pt'], ['title', 'Titre · 1 pt']];
   $('#awards').innerHTML = rows.map(([k, lbl]) => `
     <div class="award-row">
       <p>${lbl}</p>
@@ -669,10 +739,9 @@ function nextRound() {
   let pts = r.points;
   if (game.party) {
     pts = 0;
-    const per = track.titleOnly ? 2 : 1;
     for (const k of ['artist', 'title']) {
       const i = r.awards[k];
-      if (i != null) { game.players[i].score += per; pts += per; }
+      if (i != null) { game.players[i].score += fieldPoints(track, k); pts += fieldPoints(track, k); }
     }
   }
   game.history.push({
@@ -721,7 +790,7 @@ function endGame() {
   $('#tracklist').innerHTML = game.history.map((h) => `
     <li><a href="${esc(h.track.url)}" target="_blank" rel="noopener">
       <img src="${esc(h.track.thumb)}" alt="" loading="lazy">
-      <div class="t"><b>${esc(h.track.cleanTitle)}</b><span>${esc(h.track.artist)}</span></div>
+      <div class="t"><b>${esc(h.track.film || h.track.cleanTitle)}</b><span>${esc(h.track.film ? h.track.cleanTitle : h.track.artist)}</span></div>
       <span class="p ${h.points ? 'plus' : ''}">${game.party ? esc(h.who.join(', ') || '—') : (h.points ? '+' + h.points : '0')}</span>
     </a></li>`).join('');
 
@@ -745,7 +814,7 @@ function init() {
 
   $('#free-form').addEventListener('submit', submitFree);
   $('#artist-input').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !current().titleOnly && !game.round.found.title && !$('#title-input').value.trim()) {
+    if (e.key === 'Enter' && !game.round.found.title && !$('#title-input').value.trim()) {
       e.preventDefault();
       $('#title-input').focus();
     }

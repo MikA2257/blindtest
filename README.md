@@ -10,7 +10,7 @@ Pas de compte, pas d'inscription, pas de build : c'est du HTML/CSS/JS statique.
   - *4 choix* : 2 pts par bonne réponse, 3 si tu réponds en moins de 10 s.
 - **Soirée** : un seul iPhone pour tout le monde. L'iPhone joue l'extrait, les joueurs crient leur réponse, puis l'animateur révèle le titre et attribue les points (artiste / titre).
 
-Thèmes : Hits du moment, années 80 à 2010, rap FR, variété française, pop, rock, électro, Disney, ou ta propre liste d'artistes. On peut en cocher plusieurs.
+Thèmes : Hits du moment, années 80 à 2010, rap FR, variété française, pop, rock, électro, Disney (là, on devine le film : 2 pts, et la chanson en bonus), ou ta propre liste d'artistes. On peut en cocher plusieurs.
 Chaque titre révélé a un bouton « Écouter en entier » qui l'ouvre dans l'app Musique (morceau complet avec un abonnement Apple Music).
 
 ## Installer sur iPhone
