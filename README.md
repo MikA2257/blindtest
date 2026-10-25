@@ -11,7 +11,7 @@ Pas de compte, pas d'inscription, pas de build : c'est du HTML/CSS/JS statique.
 - **Soirée** : un seul iPhone pour tout le monde. L'iPhone joue l'extrait, les joueurs crient leur réponse, puis l'animateur révèle le titre et attribue les points (artiste / titre).
 
 Thèmes : Hits du moment, années 80 à 2010, rap FR, variété française, pop, rock, électro, Disney, ou ta propre liste d'artistes. On peut en cocher plusieurs.
-Chaque titre révélé a un lien qui l'ouvre directement dans l'app Musique.
+Chaque titre révélé a un bouton « Écouter en entier » qui l'ouvre dans l'app Musique (morceau complet avec un abonnement Apple Music).
 
 ## Installer sur iPhone
 
